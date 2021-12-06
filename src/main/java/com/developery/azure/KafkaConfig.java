@@ -1,6 +1,7 @@
 package com.developery.azure;
 
 
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -11,12 +12,9 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.ContainerProperties;
 import org.springframework.kafka.listener.ContainerProperties.AckMode;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
-import org.springframework.kafka.listener.ErrorHandler;
-import org.springframework.kafka.listener.SeekToCurrentErrorHandler;
 import org.springframework.retry.backoff.FixedBackOffPolicy;
 import org.springframework.retry.policy.SimpleRetryPolicy;
 import org.springframework.retry.support.RetryTemplate;
-import org.springframework.util.backoff.FixedBackOff;
 
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -59,6 +57,10 @@ public class KafkaConfig {
 			else{
 				log.error("retryTemplate의 최대 재시도횟수까지 해도 실패한 경우 여기가 호출됨. setRecoveryCallback. context: " + context);
 	    	
+				// SeekToCurrentErrorHandler 을 쓰지 않을 경우, 아래 recoverer.accept() 코드 필요
+				recoverer.accept((ConsumerRecord<?, ?>) context.getAttribute("record"),
+						(Exception)context.getLastThrowable());
+				
 				// exception을 throw 해야지 최종적으로 commit 이 수행되어 해당 offset 을 무시하고 다음 offset을 시도함. 
 				// 에러 핸들러가 동작하기 위해서는 exception throw 해야함. 그래야 DLQ로 메시지 넘어감. 
 				throw new RuntimeException(context.getLastThrowable().getMessage());
@@ -66,10 +68,16 @@ public class KafkaConfig {
 			return null;
 		}));
 		
+		
 		// retry template 를 반복하는 횟수. 1인 경우 (1)+1=2회,  3인 경우 (1)+3 = 4회, 
 		// 1000L은 retry template 간 interval. 
-		ErrorHandler errorHandler = new SeekToCurrentErrorHandler(recoverer, new FixedBackOff(1000L, 1L));
-		factory.setErrorHandler(errorHandler);
+//		ErrorHandler errorHandler = new SeekToCurrentErrorHandler(recoverer, new FixedBackOff(1000L, 1L));
+//		factory.setErrorHandler(errorHandler);
+		
+		// SeekToCurrentErrorHandler 쓰지 않는다면 아래처럼 일반적인 에러 핸들러를 만들고 로깅만 하면 됨.
+		factory.setErrorHandler((exception, record) -> {			
+			log.info("errorHandler. exception: {}, record: {}", exception, record);
+		});
 	        
 		ContainerProperties properties = factory.getContainerProperties();
 		properties.setAckMode(AckMode.MANUAL);		// 실무에서는 auto commit 대신 매뉴얼 commit을 이용.
